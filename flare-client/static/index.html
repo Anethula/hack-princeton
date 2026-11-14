@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Silent · FLARE camera</title>
+<style>
+body{font:16px system-ui;background:#10151e;color:#e8eff9;max-width:1050px;margin:40px auto;padding:0 24px}h1{font-size:36px;margin-bottom:8px}p{color:#aebed2;line-height:1.6}.grid{display:grid;grid-template-columns:1fr 1fr;gap:24px}video{width:100%;background:#06090d;border-radius:16px;transform:scaleX(-1)}button,select{font:inherit;padding:12px;margin:6px 6px 6px 0;border:0;border-radius:8px}button{background:#a6f3ce;color:#10251c;cursor:pointer}button:disabled{opacity:.4;cursor:default}textarea{box-sizing:border-box;width:100%;height:250px;background:#1c2634;color:white;border:1px solid #40516a;border-radius:12px;padding:16px;font:18px system-ui}.status{padding:16px;background:#1c2634;border-radius:10px;margin:16px 0;min-height:24px}#history{font-size:14px;color:#aebed2}li{margin-bottom:12px}@media(max-width:700px){.grid{grid-template-columns:1fr}}
+</style>
+<h1>Silent</h1><p>Camera → FLARE → editable text. Audio capture is disabled. Recordings are sent to the team's hosted FLARE service and temporary local files are deleted after processing.</p>
+<div class="grid"><section><video id="preview" autoplay muted playsinline></video>
+<div><button id="enable">Enable camera</button><button id="start" disabled>Start</button><button id="finish" disabled>Finish phrase</button><button id="stop" disabled>Stop</button></div>
+<label>Clip length <select id="duration"><option value="3000">3 seconds</option><option value="5000" selected>5 seconds</option><option value="6000">6 seconds</option></select></label>
+<label><input id="repeat" type="checkbox" checked> Continue recording</label>
+<p>Speak silently only while the status says Recording. Recording continues during processing, pausing only when two clips are waiting. Each clip is a separate phrase; this is not word-by-word streaming.</p>
+</section><section><div class="status" id="status" role="status" aria-live="polite">Checking model…</div><p id="queueStatus"></p><button id="recheck">Check connection</button><label for="transcript">Transcript — review and edit</label><textarea id="transcript"></textarea><button id="copy">Copy text</button><ol id="history"></ol></section></div>
+<script>
+const $=id=>document.getElementById(id);
+const queue=[]; const MAX_WAITING=2;
+let stream,recorder,timer,active=false,busy=false,ready=false,checking=false,opening=false,recording=false;
+let note='Checking model…',captureStart=0,captureLimit=0,discard=false;
+function render(){
+ $('enable').disabled=opening||active||recording||busy||queue.length>0;
+ $('start').disabled=!stream||!ready||active||recording||checking;
+ $('finish').disabled=!recording;
+ $('stop').disabled=!stream;
+ $('recheck').disabled=checking||busy;
+ $('queueStatus').textContent=`${busy?'Processing 1 clip':'No request running'} · ${queue.length}/${MAX_WAITING} waiting`;
+ $('status').textContent=recording?`Recording — ${Math.max(0,(captureLimit-(performance.now()-captureStart))/1000).toFixed(1)}s remaining`:active&&queue.length>=MAX_WAITING?'Catching up — capture paused. Wait before mouthing the next phrase.':note;
+}
+async function api(path,options={}){const r=await fetch(path,{...options,signal:AbortSignal.timeout(125000)});const data=await r.json();if(!r.ok)throw new Error(data.error||`HTTP ${r.status}`);return data;}
+async function check(){checking=true;render();try{const r=await api('/api/ready');ready=r.model_loaded===true;note=ready?'Model ready. Enable camera, then Start.':'Model unavailable.';}catch(e){ready=false;note=e.message;}finally{checking=false;render();}}
+function endCapture(){if(recorder?.state==='recording'){clearInterval(timer);recorder.stop();}}
+function fail(message){
+ active=false;ready=false;const lost=queue.length+(recording?1:0);queue.length=0;discard=true;endCapture();
+ note=`${message} No retry sent. ${lost} unsent clip(s) discarded; repeat those phrases. Check connection before restarting.`;render();
+}
+function maybeCapture(){if(active&&stream&&!recording&&queue.length<MAX_WAITING)capture();else render();}
+async function drain(){
+ if(busy||!queue.length)return;
+ const clip=queue.shift();busy=true;const sent=performance.now();render();maybeCapture();
+ try{
+ const r=await api('/api/transcribe',{method:'POST',headers:{'Content-Type':clip.blob.type},body:clip.blob});
+ if(typeof r.text!=='string'||!r.text.trim()||r.audio_used!==false)throw new Error('Invalid visual-only transcript');
+ const now=performance.now();$('transcript').value+=($('transcript').value?'\n':'')+r.text;
+ const li=document.createElement('li');const seconds=ms=>(ms/1000).toFixed(2)+'s';
+ li.textContent=`${r.text} | capture ${seconds(clip.stopped-clip.began)} · queue ${seconds(sent-clip.stopped)} · request ${seconds(now-sent)} · start-to-text ${seconds(now-clip.began)} | server preprocess ${r.preprocess_ms}ms · inference ${r.inference_ms}ms · total ${r.total_ms}ms | local receive ${r.receive_ms??'?'}ms · proxy ${r.proxy_ms}ms`;
+ $('history').prepend(li);note='Transcript received. Review before use.';
+ }catch(e){fail(e.message);}finally{busy=false;render();drain();maybeCapture();}
+}
+function capture(){
+ const mime=['video/webm;codecs=vp8','video/webm','video/mp4'].find(t=>MediaRecorder.isTypeSupported(t));
+ if(!mime){active=false;note='No supported recording format. Try Chrome.';render();return;}
+ const chunks=[];discard=false;captureStart=performance.now();captureLimit=Number($('duration').value);const began=captureStart;
+ try{recorder=new MediaRecorder(stream,{mimeType:mime});}catch(e){fail(e.message);return;}
+ recorder.ondataavailable=e=>{if(e.data.size)chunks.push(e.data);};
+ recorder.onerror=()=>fail('Camera recording failed.');
+ recorder.onstop=()=>{
+ clearInterval(timer);recording=false;const stopped=performance.now();
+ if(discard){render();return;}
+ const blob=new Blob(chunks,{type:mime});
+ if(stopped-began>7500||!blob.size){fail('Clip was empty or exceeded 7.5 seconds. Keep this tab visible.');return;}
+ queue.push({blob,began,stopped});
+ if(!$('repeat').checked)active=false;
+ note='Phrase queued. Camera stays enabled until Stop.';
+ drain();maybeCapture();render();
+ };
+ try{recorder.start();recording=true;}catch(e){fail(e.message);return;}
+ timer=setInterval(()=>{render();if(performance.now()-began>=captureLimit)endCapture();},100);render();
+}
+$('enable').onclick=async()=>{opening=true;render();try{
+ if(!navigator.mediaDevices||!window.MediaRecorder)throw new Error('Use a current browser on localhost.');
+ stream?.getTracks().forEach(t=>t.stop());stream=null;
+ stream=await navigator.mediaDevices.getUserMedia({video:{width:{ideal:1280},height:{ideal:720},frameRate:{ideal:30},facingMode:'user'},audio:false});$('preview').srcObject=stream;note='Camera ready. Press Start.';
+ }catch(e){note=e.message;}finally{opening=false;render();}};
+$('start').onclick=()=>{active=true;maybeCapture();};
+$('finish').onclick=endCapture;
+$('stop').onclick=()=>{active=false;endCapture();stream?.getTracks().forEach(t=>t.stop());stream=null;$('preview').srcObject=null;note='Camera stopped. Queued clips will finish processing.';render();};
+$('recheck').onclick=check;
+$('copy').onclick=async()=>{try{await navigator.clipboard.writeText($('transcript').value);}catch{note='Select and copy the text manually.';render();}};
+window.addEventListener('pagehide',()=>{active=false;discard=true;queue.length=0;clearInterval(timer);stream?.getTracks().forEach(t=>t.stop());});
+check();
+</script></html>

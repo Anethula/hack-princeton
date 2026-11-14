@@ -1,0 +1,64 @@
+# Local secrets (keep shareable configuration templates)
+.env
+.env.*
+!.env.example
+!.env.sample
+!.env.template
+*.pem
+*.key
+credentials.json
+.aws/
+
+# Python environments, generated files, and caches
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+.ipynb_checkpoints/
+
+# JavaScript dependencies and build caches
+node_modules/
+.next/
+.vite/
+coverage/
+
+# Local runtime state and logs
+*.log
+.langgraph_api/
+deep_agents_memory.db
+deep_agents_memory.db-*
+tmp/
+
+# Private camera recordings and derived clips
+*.[mM][oO][vV]
+*.[mM][pP]4
+*.[wW][eE][bB][mM]
+recordings/
+
+# Downloaded model weights and upstream research checkout
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+pretrained_models/
+pretrain_models/
+/vendor/FLARE/
+
+# OS and editor artifacts
+.DS_Store
+._*
+Thumbs.db
+.idea/
+*.swp
+*.swo
+*~

@@ -1,0 +1,3 @@
+[submodule "hack-princeton-intro-to-deep-agents"]
+	path = hack-princeton-intro-to-deep-agents
+	url = https://github.com/langchain-samples/hack-princeton-intro-to-deep-agents.git
